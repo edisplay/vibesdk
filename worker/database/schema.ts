@@ -63,6 +63,31 @@ export const users = sqliteTable('users', {
 }));
 
 /**
+ * User OAuth Identities table - Links multiple OAuth provider identities to a
+ * single user. Login resolves by (provider, providerId) here rather than by
+ * email, which prevents cross-provider account takeover via email collision.
+ */
+export const userOauthIdentities = sqliteTable('user_oauth_identities', {
+    id: text('id').primaryKey(),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+
+    // Provider identity
+    provider: text('provider').notNull(), // 'github', 'google', 'cloudflare'
+    providerId: text('provider_id').notNull(),
+
+    // Provider-reported email at link/login time (for display and auditing)
+    email: text('email'),
+    emailVerified: integer('email_verified', { mode: 'boolean' }).default(false),
+
+    // Metadata
+    createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+    providerIdx: uniqueIndex('user_oauth_identities_provider_unique_idx').on(table.provider, table.providerId),
+    userIdx: index('user_oauth_identities_user_idx').on(table.userId),
+}));
+
+/**
  * Sessions table - JWT session management with refresh token support
  */
 export const sessions = sqliteTable('sessions', {
@@ -612,6 +637,9 @@ export type NewAppView = typeof appViews.$inferInsert;
 
 export type OAuthState = typeof oauthStates.$inferSelect;
 export type NewOAuthState = typeof oauthStates.$inferInsert;
+
+export type UserOauthIdentity = typeof userOauthIdentities.$inferSelect;
+export type NewUserOauthIdentity = typeof userOauthIdentities.$inferInsert;
 
 export type SystemSetting = typeof systemSettings.$inferSelect;
 export type NewSystemSetting = typeof systemSettings.$inferInsert;

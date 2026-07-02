@@ -305,6 +305,16 @@ export interface ActiveSessionsData {
   }>;
 }
 
+// Linked OAuth Identities Response - matches getLinkedIdentities controller format
+export interface LinkedIdentitiesData {
+  identities: Array<{
+    provider: string;
+    email: string | null;
+    emailVerified: boolean;
+    createdAt: Date | null;
+  }>;
+}
+
 // API Keys Response - matches controller response format
 export interface ApiKeysData {
   keys: Array<{

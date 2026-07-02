@@ -318,6 +318,97 @@ export class AuthController extends BaseController {
             return AuthController.handleError(error, 'initiate OAuth');
         }
     }
+
+    /**
+     * Initiate an authenticated account-link flow for the current user.
+     * GET /api/auth/link/:provider
+     */
+    static async initiateProviderLink(request: Request, env: Env, _ctx: ExecutionContext, routeContext: RouteContext): Promise<Response> {
+        try {
+            const user = routeContext.user;
+            if (!user) {
+                return AuthController.createErrorResponse('Unauthorized', 401);
+            }
+
+            const validatedProvider = oauthProviderSchema.parse(routeContext.pathParams.provider);
+
+            const authService = new AuthService(env);
+            const { authUrl, nonce } = await authService.getOAuthAuthorizationUrl(
+                validatedProvider,
+                request,
+                '/settings',
+                user.id
+            );
+
+            return new Response(null, {
+                status: 302,
+                headers: {
+                    Location: authUrl,
+                    'Set-Cookie': buildOAuthNonceCookie(env, nonce),
+                },
+            });
+        } catch (error) {
+            this.logger.error('Provider link initiation failed', error);
+            if (error instanceof SecurityError) {
+                return AuthController.createErrorResponse(error.message, error.statusCode);
+            }
+            return AuthController.handleError(error, 'initiate provider link');
+        }
+    }
+
+    /**
+     * List the current user's linked OAuth identities.
+     * GET /api/auth/identities
+     */
+    static async getLinkedIdentities(_request: Request, env: Env, _ctx: ExecutionContext, routeContext: RouteContext): Promise<Response> {
+        try {
+            const user = routeContext.user;
+            if (!user) {
+                return AuthController.createErrorResponse('Unauthorized', 401);
+            }
+
+            const authService = new AuthService(env);
+            const identities = await authService.getUserIdentities(user.id);
+
+            return AuthController.createSuccessResponse({
+                identities: identities.map((identity) => ({
+                    provider: identity.provider,
+                    email: identity.email,
+                    emailVerified: !!identity.emailVerified,
+                    createdAt: identity.createdAt,
+                })),
+            });
+        } catch (error) {
+            return AuthController.handleError(error, 'get linked identities');
+        }
+    }
+
+    /**
+     * Unlink an OAuth identity from the current user.
+     * DELETE /api/auth/identities/:provider
+     */
+    static async unlinkProvider(_request: Request, env: Env, _ctx: ExecutionContext, routeContext: RouteContext): Promise<Response> {
+        try {
+            const user = routeContext.user;
+            if (!user) {
+                return AuthController.createErrorResponse('Unauthorized', 401);
+            }
+
+            const validatedProvider = oauthProviderSchema.parse(routeContext.pathParams.provider);
+
+            const authService = new AuthService(env);
+            await authService.unlinkOAuthIdentity(user.id, validatedProvider);
+
+            return AuthController.createSuccessResponse({
+                message: 'Provider unlinked successfully',
+            });
+        } catch (error) {
+            if (error instanceof SecurityError) {
+                return AuthController.createErrorResponse(error.message, error.statusCode);
+            }
+            return AuthController.handleError(error, 'unlink provider');
+        }
+    }
     
     /**
      * Handle OAuth callback
@@ -343,6 +434,45 @@ export class AuthController extends BaseController {
             }
             
             const authService = new AuthService(env);
+            const baseOrigin = new URL(request.url).origin;
+
+            // Account-link flow: the state was bound to a user at initiation time.
+            // Re-authenticate the browser session and require it to match before
+            // attaching the identity. No new session is minted.
+            const linkUserId = await authService.getPendingLinkUserId(validatedProvider, state);
+            if (linkUserId) {
+                const session = await authMiddleware(request, env);
+                if (!session || session.user.id !== linkUserId) {
+                    return Response.redirect(`${baseOrigin}/settings?error=link_unauthorized`, 302);
+                }
+
+                try {
+                    const linkResult = await authService.completeOAuthLink(
+                        validatedProvider,
+                        code,
+                        state,
+                        request,
+                        session.user.id
+                    );
+                    const safeLinkRedirect = linkResult.redirectUrl
+                        ? validateRedirectUrl(linkResult.redirectUrl, request)
+                        : null;
+                    const location = safeLinkRedirect || `${baseOrigin}/settings?linked=${validatedProvider}`;
+                    const response = new Response(null, {
+                        status: 302,
+                        headers: { 'Location': location }
+                    });
+                    response.headers.append('Set-Cookie', buildClearOAuthNonceCookie(env));
+                    return response;
+                } catch (error) {
+                    this.logger.error('OAuth link failed', error);
+                    const reason = error instanceof SecurityError && error.statusCode === 409
+                        ? 'link_conflict'
+                        : 'link_failed';
+                    return Response.redirect(`${baseOrigin}/settings?error=${reason}`, 302);
+                }
+            }
+
             const result = await authService.handleOAuthCallback(
                 validatedProvider,
                 code,

@@ -45,6 +45,7 @@ import type{
 	App,
 	ActiveSessionsData,
 	ApiKeysData,
+	LinkedIdentitiesData,
 	LoginResponseData,
 	RegisterResponseData,
 	ProfileResponseData,
@@ -1293,6 +1294,38 @@ class ApiClient {
 
 		// Redirect to OAuth provider
 		window.location.href = oauthUrl.toString();
+	}
+
+	/**
+	 * Get the current user's linked OAuth identities
+	 */
+	async getLinkedIdentities(): Promise<ApiResponse<LinkedIdentitiesData>> {
+		return this.request<LinkedIdentitiesData>('/api/auth/identities');
+	}
+
+	/**
+	 * Unlink an OAuth provider from the current user
+	 */
+	async unlinkProvider(
+		provider: OAuthProvider,
+	): Promise<ApiResponse<{ message: string }>> {
+		return this.request<{ message: string }>(
+			`/api/auth/identities/${provider}`,
+			{
+				method: 'DELETE',
+			},
+		);
+	}
+
+	/**
+	 * Initiate an authenticated account-link flow (redirects to provider)
+	 */
+	initiateProviderLink(provider: OAuthProvider): void {
+		const linkUrl = new URL(
+			`/api/auth/link/${provider}`,
+			window.location.origin,
+		);
+		window.location.href = linkUrl.toString();
 	}
 
 	// ===============================

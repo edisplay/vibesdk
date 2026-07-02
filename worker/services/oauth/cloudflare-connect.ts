@@ -148,7 +148,11 @@ export class CloudflareConnectOAuthProvider extends BaseOAuthProvider {
 				email: user.email || 'unknown@cloudflare.local',
 				name: composedName,
 				picture: user.picture,
-				emailVerified: user.email_verified,
+				// Cloudflare dashboard accounts require a verified email to exist, but
+				// the userinfo endpoint does not always return `email_verified`. Default
+				// to verified when the flag is absent so the auth-layer verified-email
+				// gate does not incorrectly reject legitimate Cloudflare logins.
+				emailVerified: user.email_verified ?? true,
 				providerData: data,
 			};
 		} catch (error) {
