@@ -8,6 +8,7 @@ import {
     AppDetailsData, 
     AppStarToggleData,
     GitCloneTokenData,
+    PreviewTokenData,
 } from './types';
 import { AgentSummary } from '../../../agents/core/types';
 import { toPublicAppDetail } from '../apps/publicAppDto';
@@ -17,6 +18,11 @@ import { RateLimitExceededError } from 'shared/types/errors';
 import { extractRequestMetadata } from '../../../utils/authUtils';
 import { buildUserWorkerUrl, buildGitCloneUrl } from 'worker/utils/urls';
 import { JWTUtils } from '../../../utils/jwtUtils';
+import {
+    OWNER_PREVIEW_QUERY_PARAM,
+    OWNER_PREVIEW_TOKEN_TTL_SECONDS,
+    signOwnerPreviewToken,
+} from '../../../utils/ownerPreviewToken';
 
 export class AppViewController extends BaseController {
     static logger = createLogger('AppViewController');
@@ -224,6 +230,61 @@ export class AppViewController extends BaseController {
         } catch (error) {
             this.logger.error('Error generating git clone token:', error);
             return AppViewController.createErrorResponse<GitCloneTokenData>('Failed to generate token', 500);
+        }
+    }
+
+    /**
+     * Generate a short-lived, deployment-scoped owner-preview token so the owner
+     * can open a PRIVATE deployed app's URL on a preview subdomain (where the
+     * main-domain session cookie is not sent).
+     * POST /api/apps/:id/preview-token  (OWNER ONLY)
+     */
+    static async generatePreviewToken(
+        _request: Request,
+        env: Env,
+        _ctx: ExecutionContext,
+        context: RouteContext
+    ): Promise<ControllerResponse<ApiResponse<PreviewTokenData>>> {
+        try {
+            const user = context.user!;
+            const appId = context.pathParams.id;
+
+            if (!appId) {
+                return AppViewController.createErrorResponse<PreviewTokenData>('App ID is required', 400);
+            }
+
+            const appService = new AppService(env);
+            const app = await appService.getAppDetails(appId, user.id);
+
+            if (!app) {
+                return AppViewController.createErrorResponse<PreviewTokenData>('App not found', 404);
+            }
+            if (app.userId !== user.id) {
+                return AppViewController.createErrorResponse<PreviewTokenData>('App not found', 404);
+            }
+            if (!app.deploymentId) {
+                return AppViewController.createErrorResponse<PreviewTokenData>('App is not deployed', 400);
+            }
+
+            const token = await signOwnerPreviewToken(env, {
+                userId: user.id,
+                deploymentId: app.deploymentId,
+            });
+
+            const base = buildUserWorkerUrl(env, app.deploymentId);
+            const previewUrl = `${base}/?${OWNER_PREVIEW_QUERY_PARAM}=${encodeURIComponent(token)}`;
+
+            const responseData: PreviewTokenData = {
+                token,
+                expiresIn: OWNER_PREVIEW_TOKEN_TTL_SECONDS,
+                expiresAt: new Date(Date.now() + OWNER_PREVIEW_TOKEN_TTL_SECONDS * 1000).toISOString(),
+                previewUrl,
+            };
+
+            return AppViewController.createSuccessResponse(responseData);
+        } catch (error) {
+            this.logger.error('Error generating preview token:', error);
+            return AppViewController.createErrorResponse<PreviewTokenData>('Failed to generate token', 500);
         }
     }
 

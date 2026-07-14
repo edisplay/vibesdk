@@ -555,11 +555,14 @@ export class AppService extends BaseService {
             return { success: false, error: 'You can only change visibility of your own apps' };
         }
 
-        // Update the app visibility
+        // Update the app visibility. Bump `previewVersion` on every visibility
+        // change so outstanding space-preview tokens (which embed the value at
+        // mint) are revoked immediately after a public->private toggle.
         const updatedApps = await this.database
             .update(schema.apps)
             .set({
                 visibility,
+                previewVersion: sql`${schema.apps.previewVersion} + 1`,
                 updatedAt: new Date()
             })
             .where(eq(schema.apps.id, appId))
@@ -575,6 +578,55 @@ export class AppService extends BaseService {
         }
 
         return { success: true, app: updatedApps[0] };
+    }
+
+    /**
+     * Resolve the owning app for a deployed worker by its deployment id
+     * (the subdomain used by the dispatch namespace equals `deploymentId`).
+     *
+     * Reads from the PRIMARY DB (not a read replica) with NO caching so that a
+     * just-toggled `visibility` is observed on the very next dispatch request
+     * (meets the <1s public->private revocation requirement). This is a single
+     * indexed lookup on `deployment_id`.
+     */
+    async getAppOwnershipByDeploymentId(
+        deploymentId: string
+    ): Promise<{ id: string; userId: string | null; visibility: 'private' | 'public' } | null> {
+        const row = await this.database
+            .select({
+                id: schema.apps.id,
+                userId: schema.apps.userId,
+                visibility: schema.apps.visibility,
+            })
+            .from(schema.apps)
+            .where(eq(schema.apps.deploymentId, deploymentId))
+            .limit(1);
+
+        if (row.length === 0) {
+            return null;
+        }
+
+        return row[0];
+    }
+
+    /**
+     * Read an app's current `previewVersion` from the PRIMARY DB (no cache) so a
+     * visibility toggle that bumped it is observed on the very next preview
+     * request (<1s revocation of outstanding space-preview tokens).
+     * Returns `null` if the app does not exist.
+     */
+    async getPreviewVersion(appId: string): Promise<number | null> {
+        const row = await this.database
+            .select({ previewVersion: schema.apps.previewVersion })
+            .from(schema.apps)
+            .where(eq(schema.apps.id, appId))
+            .limit(1);
+
+        if (row.length === 0) {
+            return null;
+        }
+
+        return row[0].previewVersion;
     }
 
     // ========================================

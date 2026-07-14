@@ -49,6 +49,18 @@ export interface GitCloneTokenData {
     cloneUrl: string;
 }
 
+/**
+ * Response data for owner-preview token generation. Lets the owner open a
+ * private deployed app's URL on a preview subdomain.
+ */
+export interface PreviewTokenData {
+    token: string;
+    expiresIn: number;
+    expiresAt: string;
+    /** Deployment URL with the owner-preview token appended. */
+    previewUrl: string;
+}
+
 // /**
 //  * Response data for forkApp
 //  */
